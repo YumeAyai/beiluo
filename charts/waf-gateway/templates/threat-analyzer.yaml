@@ -1,13 +1,21 @@
+{{- if .Values.threatAnalyzer.enabled }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: threat-analyzer
-  namespace: default
+  name: {{ include "waf-gateway.fullname" . }}-threat-analyzer
+  labels:
+    {{- include "waf-gateway.labels" . | nindent 4 }}
+  {{- with .Values.threatAnalyzer.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: threat-analyzer-role
+  name: {{ include "waf-gateway.fullname" . }}-threat-analyzer-role
+  labels:
+    {{- include "waf-gateway.labels" . | nindent 4 }}
 rules:
 - apiGroups: ["cilium.io"]
   resources: ["ciliumnetworkpolicies", "ciliumclusterwidenetworkpolicies"]
@@ -19,90 +27,93 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: threat-analyzer-binding
+  name: {{ include "waf-gateway.fullname" . }}-threat-analyzer-binding
+  labels:
+    {{- include "waf-gateway.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: threat-analyzer-role
+  name: {{ include "waf-gateway.fullname" . }}-threat-analyzer-role
 subjects:
 - kind: ServiceAccount
-  name: threat-analyzer
-  namespace: default
+  name: {{ include "waf-gateway.fullname" . }}-threat-analyzer
+  namespace: {{ .Release.Namespace }}
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: threat-analyzer-config
-  namespace: default
+  name: {{ include "waf-gateway.fullname" . }}-threat-analyzer-config
+  labels:
+    {{- include "waf-gateway.labels" . | nindent 4 }}
 data:
   threat-analyzer.conf: |
-    # Loki配置
-    LOKI_URL = "http://loki:3100"
+    # Loki Configuration
+    LOKI_URL = "{{ .Values.threatAnalyzer.lokiUrl }}"
     LOKI_QUERY = '{app="coraza"} | json'
 
-    # Cilium配置
-    CILIUM_URL = "http://cilium-operator:9963"
+    # Cilium Configuration
+    CILIUM_URL = "{{ .Values.threatAnalyzer.ciliumUrl }}"
 
-    # 攻击检测设置
-    ATTACK_THRESHOLD = 3  # 阻止IP前的攻击次数
-    BLOCK_DURATION_HOURS = 24  # 阻止IP的时长（小时）
-    TIME_WINDOW_MINUTES = 10  # 统计攻击的时间窗口（分钟）
+    # Attack Detection Settings
+    ATTACK_THRESHOLD = {{ .Values.threatAnalyzer.attackThreshold | quote }}  # Number of attacks before blocking an IP
+    BLOCK_DURATION_HOURS = {{ .Values.threatAnalyzer.blockDurationHours | quote }}  # How long to block an IP (in hours)
+    TIME_WINDOW_MINUTES = {{ .Values.threatAnalyzer.timeWindowMinutes | quote }}  # Time window to count attacks (in minutes)
 
-    # 日志
+    # Logging
     LOG_LEVEL = "INFO"
     LOG_FILE = "/var/log/threat-analyzer.log"
 
-    # 网络策略设置
-    BLOCKED_NAMESPACE = "default"  # 应用阻止策略的命名空间
+    # Network Policy Settings
+    BLOCKED_NAMESPACE = "default"  # Namespace to apply blocking policies
 
-    # 额外过滤器（可选）
-    IGNORE_INTERNAL_IPS = True  # 是否忽略内部/私有IP
-    TRUSTED_IP_RANGES = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]  # 不要阻止这些范围
+    # Additional filters (optional)
+    IGNORE_INTERNAL_IPS = True  # Whether to ignore internal/private IPs
+    TRUSTED_IP_RANGES = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]  # Don't block these ranges
 
-    # 调试模式
+    # Debug mode
     DEBUG = False
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: threat-analyzer
-  namespace: default
+  name: {{ include "waf-gateway.fullname" . }}-threat-analyzer
   labels:
-    app: threat-analyzer
+    {{- include "waf-gateway.labels" . | nindent 4 }}
 spec:
-  replicas: 1
+  replicas: {{ .Values.threatAnalyzer.replicaCount }}
   selector:
     matchLabels:
-      app: threat-analyzer
+      {{- include "waf-gateway.selectorLabels" . | nindent 6 }}
+      component: threat-analyzer
   template:
     metadata:
       labels:
-        app: threat-analyzer
+        {{- include "waf-gateway.selectorLabels" . | nindent 8 }}
+        component: threat-analyzer
     spec:
-      serviceAccountName: threat-analyzer
+      serviceAccountName: {{ include "waf-gateway.fullname" . }}-threat-analyzer
       containers:
       - name: threat-analyzer
-        image: python:3.9-slim
+        image: "{{ .Values.threatAnalyzer.image.repository }}:{{ .Values.threatAnalyzer.image.tag }}"
+        imagePullPolicy: {{ .Values.threatAnalyzer.image.pullPolicy }}
         command: ["/bin/bash", "-c"]
         args:
         - |
           apt-get update && apt-get install -y curl jq && \
           pip install requests && \
-          curl -L https://raw.githubusercontent.com/cilium/cilium/master/install/kubernetes/install.sh | bash -- cilium install && \
-          curl -L https://raw.githubusercontent.com/cilium/cilium/master/examples/kubernetes/connectivity-check/connectivity-check.yaml | kubectl apply -f - && \
           echo "$CONFIG_CONTENT" > /app/threat-analyzer.conf && \
           python /app/threat-analyzer.py --config /app/threat-analyzer.conf
         env:
         - name: LOKI_URL
-          value: "http://loki:3100"
+          value: "{{ .Values.threatAnalyzer.lokiUrl }}"
         - name: CILIUM_URL
-          value: "http://cilium-operator:9963"
+          value: "{{ .Values.threatAnalyzer.ciliumUrl }}"
         - name: ATTACK_THRESHOLD
-          value: "3"
+          value: "{{ .Values.threatAnalyzer.attackThreshold }}"
         - name: BLOCK_DURATION_HOURS
-          value: "24"
+          value: "{{ .Values.threatAnalyzer.blockDurationHours }}"
         - name: TIME_WINDOW_MINUTES
-          value: "10"
+          value: "{{ .Values.threatAnalyzer.timeWindowMinutes }}"
         volumeMounts:
         - name: config-volume
           mountPath: /app/threat-analyzer.conf
@@ -110,12 +121,7 @@ spec:
         - name: threat-analyzer-script
           mountPath: /app/threat-analyzer.py
         resources:
-          requests:
-            memory: "128Mi"
-            cpu: "100m"
-          limits:
-            memory: "256Mi"
-            cpu: "200m"
+          {{- toYaml .Values.threatAnalyzer.resources | nindent 10 }}
         securityContext:
           runAsNonRoot: true
           runAsUser: 1000
@@ -127,17 +133,18 @@ spec:
       volumes:
       - name: config-volume
         configMap:
-          name: threat-analyzer-config
+          name: {{ include "waf-gateway.fullname" . }}-threat-analyzer-config
       - name: threat-analyzer-script
         configMap:
-          name: threat-analyzer-script
+          name: {{ include "waf-gateway.fullname" . }}-threat-analyzer-script
       restartPolicy: Always
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: threat-analyzer-script
-  namespace: default
+  name: {{ include "waf-gateway.fullname" . }}-threat-analyzer-script
+  labels:
+    {{- include "waf-gateway.labels" . | nindent 4 }}
 data:
   threat-analyzer.py: |
     #!/usr/bin/env python3
@@ -145,7 +152,7 @@ data:
     Threat Analyzer for Passive WAF System
 
     This script monitors Loki for WAF logs and automatically blocks
-    high-risk IPs using Cilium Network Policies.
+    high-risk IPs using Cilium Network Policies with TTL-based cleanup.
     """
 
     import os
@@ -157,6 +164,7 @@ data:
     from datetime import datetime, timedelta
     from collections import defaultdict
     import argparse
+    import subprocess
 
     # Configure logging
     logging.basicConfig(
@@ -194,7 +202,7 @@ data:
             else:
                 # Use provided parameters or defaults
                 self.loki_url = loki_url or os.getenv('LOKI_URL', 'http://loki:3100')
-                self.cilium_url = cilium_url or os.getenv('CILUM_URL', 'http://cilium-operator:9963')
+                self.cilium_url = cilium_url or os.getenv('CILIUM_URL', 'http://cilium-operator:9963')
                 self.attack_threshold = int(attack_threshold or os.getenv('ATTACK_THRESHOLD', '3'))
                 self.block_duration_hours = int(block_duration_hours or os.getenv('BLOCK_DURATION_HOURS', '24'))
                 self.time_window_minutes = int(time_window_minutes or 10)
@@ -263,6 +271,7 @@ data:
                 message = log_entry.get('message', log_entry.get('msg', ''))
                 uri = log_entry.get('uri', log_entry.get('request_uri', ''))
                 method = log_entry.get('method', log_entry.get('request_method', ''))
+                timestamp = log_entry.get('timestamp', datetime.utcnow().isoformat())
 
                 return {
                     'client_ip': client_ip,
@@ -270,7 +279,7 @@ data:
                     'message': message,
                     'uri': uri,
                     'method': method,
-                    'timestamp': log_entry.get('timestamp', datetime.utcnow().isoformat())
+                    'timestamp': timestamp
                 }
             except Exception as e:
                 logger.error(f"Error extracting attack info: {e}")
@@ -336,7 +345,7 @@ data:
             return high_risk_ips
 
         def create_cilium_network_policy(self, ip):
-            """Create a Cilium NetworkPolicy to block an IP"""
+            """Create a Cilium NetworkPolicy to block an IP with TTL"""
             policy_name = f"block-ip-{ip.replace('.', '-').replace(':', '-')}"
             expires_at = datetime.utcnow() + timedelta(hours=self.block_duration_hours)
 
@@ -352,6 +361,9 @@ data:
                         "blocked-at": datetime.utcnow().isoformat(),
                         "expires-at": expires_at.isoformat(),
                         "ip-blocked": ip
+                    },
+                    "annotations": {
+                        "description": f"Auto-generated policy to block IP {ip} due to suspicious activity"
                     }
                 },
                 "spec": {
@@ -400,11 +412,63 @@ data:
                     return True
                 else:
                     logger.error(f"Failed to apply Cilium policy: {result.stderr}")
+                    # Clean up temporary file even if failed
+                    if os.path.exists(policy_file):
+                        os.remove(policy_file)
                     return False
 
             except Exception as e:
                 logger.error(f"Error blocking IP {ip}: {e}")
                 return False
+
+        def cleanup_expired_policies(self):
+            """Remove CiliumNetworkPolicies that have expired"""
+            try:
+                # Get all CiliumNetworkPolicies created by threat-analyzer
+                result = subprocess.run([
+                    'kubectl', 'get', 'cnp', '-o', 'json', '-n', self.blocked_namespace
+                ], capture_output=True, text=True)
+
+                if result.returncode != 0:
+                    logger.error(f"Failed to get CNPs: {result.stderr}")
+                    return
+
+                cnp_data = json.loads(result.stdout)
+                current_time = datetime.utcnow()
+                expired_policies = []
+
+                for item in cnp_data.get('items', []):
+                    # Check if policy was created by threat-analyzer
+                    labels = item.get('metadata', {}).get('labels', {})
+                    if labels.get('blocked-by') == 'threat-analyzer':
+                        expires_at = labels.get('expires-at')
+                        if expires_at:
+                            try:
+                                # Parse the expiration time
+                                policy_expires = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+                                if current_time >= policy_expires:
+                                    expired_policies.append(item['metadata']['name'])
+                            except ValueError:
+                                logger.warning(f"Invalid expires-at format for policy {item['metadata']['name']}: {expires_at}")
+
+                # Delete expired policies
+                for policy_name in expired_policies:
+                    logger.info(f"Deleting expired policy: {policy_name}")
+                    delete_result = subprocess.run([
+                        'kubectl', 'delete', 'cnp', policy_name, '-n', self.blocked_namespace
+                    ], capture_output=True, text=True)
+
+                    if delete_result.returncode == 0:
+                        logger.info(f"Successfully deleted expired policy: {policy_name}")
+                        # Remove from blocked IPs set if present
+                        ip_blocked = labels.get('ip-blocked')
+                        if ip_blocked in self.blocked_ips:
+                            self.blocked_ips.remove(ip_blocked)
+                    else:
+                        logger.error(f"Failed to delete policy {policy_name}: {delete_result.stderr}")
+
+            except Exception as e:
+                logger.error(f"Error during policy cleanup: {e}")
 
         def run(self):
             """Main execution loop"""
@@ -416,6 +480,10 @@ data:
 
             while True:
                 try:
+                    # Clean up expired policies periodically (every 10 iterations)
+                    if int(time.time()) % 300 == 0:  # Every 5 minutes
+                        self.cleanup_expired_policies()
+
                     # Query Loki for recent WAF logs
                     logs = self.query_loki()
 
@@ -485,3 +553,4 @@ data:
 
     if __name__ == "__main__":
         main()
+{{- end }}

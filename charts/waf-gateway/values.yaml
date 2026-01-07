@@ -1,0 +1,74 @@
+# Default values for waf-gateway
+
+# WAF Gateway configuration
+wafGateway:
+  replicaCount: 1
+  image:
+    repository: envoyproxy/envoy-contrib
+    tag: v1.28-latest
+    pullPolicy: IfNotPresent
+  service:
+    type: LoadBalancer
+    ports:
+      http: 80
+      https: 443
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  livenessProbe:
+    initialDelaySeconds: 30
+    periodSeconds: 10
+  readinessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+
+# Coraza WAF configuration
+coraza:
+  rules:
+    engine: DetectionOnly  # Can be DetectionOnly or On
+  logLevel: INFO
+  auditLogFormat: json
+
+# Threat analyzer configuration
+threatAnalyzer:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: python
+    tag: 3.9-slim
+    pullPolicy: IfNotPresent
+  lokiUrl: "http://loki:3100"
+  ciliumUrl: "http://cilium-operator:9963"
+  attackThreshold: 3
+  blockDurationHours: 24
+  timeWindowMinutes: 10
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "200m"
+
+# TLS configuration
+tls:
+  enabled: true
+  # certificate and key should be provided in a secret
+  secretName: ""
+
+# Service account configuration
+serviceAccount:
+  create: true
+  name: ""
+
+# RBAC configuration
+rbac:
+  create: true
+
+# Network policies
+networkPolicy:
+  enabled: true

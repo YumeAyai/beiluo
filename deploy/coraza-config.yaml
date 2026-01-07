@@ -5,16 +5,16 @@ metadata:
   namespace: default
 data:
   coraza.conf: |
-    # Coraza Configuration for Passive WAF
+    # 被动WAF的Coraza配置
 
-    # Set the rule engine to DetectionOnly mode (logs but doesn't block)
+    # 将规则引擎设置为DetectionOnly模式（仅记录，不阻止）
     SecRuleEngine DetectionOnly
 
-    # Include OWASP CRS rules for comprehensive protection
+    # 包含OWASP CRS规则以实现全面保护
     Include @REQUEST-900-EXCLUSION-RULES-BEFORE-CORAZA
     Include @RESPONSE-999-EXCLUSION-RULES-AFTER-CORAZA
 
-    # Core Ruleset - Only include essential rule files for detection
+    # 核心规则集 - 仅包含检测所需的基本规则文件
     Include @OWASP_CRS/REQUEST-901-INITIALIZATION.conf
     Include @OWASP_CRS/REQUEST-910-IP-REPUTATION.conf
     Include @OWASP_CRS/REQUEST-920-PROTOCOL-ENFORCEMENT.conf
@@ -29,33 +29,33 @@ data:
     Include @OWASP_CRS/REQUEST-944-APPLICATION-ATTACK-JAVA.conf
     Include @OWASP_CRS/REQUEST-949-BLOCKING-EVALUATION.conf
 
-    # Audit logging configuration for threat analysis
+    # 威胁分析的审计日志配置
     SecAuditEngine RelevantOnly
-    SecAuditLogRelevantStatus "^(?:5|4(?!04))"  # Log 5xx and 4xx (except 404)
-    SecAuditLogParts ABCFHZ  # Log request/response headers and bodies
-    SecAuditLogType Serial  # Single log entry per request
-    SecAuditLogFormat JSON  # JSON format for easy parsing
+    SecAuditLogRelevantStatus "^(?:5|4(?!04))"  # 记录5xx和4xx（除404外）
+    SecAuditLogParts ABCFHZ  # 记录请求/响应头和正文
+    SecAuditLogType Serial  # 每个请求一条日志记录
+    SecAuditLogFormat JSON  # JSON格式以便于解析
 
-    # Performance tuning for detection mode
-    SecResponseBodyAccess Off  # Don't inspect response bodies in detection mode
+    # 检测模式的性能调优
+    SecResponseBodyAccess Off  # 检测模式下不检查响应正文
     SecRule REQUEST_HEADERS:Content-Type "text/xml" \
       "id:100,phase:1,t:lower,ctl:ruleRemoveById=20000-29999"
 
-    # Logging configuration
+    # 日志配置
     SecDebugLogLevel 1
-    SecAuditLog /dev/stdout  # Output to stdout for Loki collection
-    SecErrorLog /dev/stdout   # Output errors to stdout as well
+    SecAuditLog /dev/stdout  # 输出到stdout以供Loki收集
+    SecErrorLog /dev/stdout   # 错误也输出到stdout
 
-    # Performance settings
-    SecRulePerfTime 1000  # Log rules that take more than 1000us
+    # 性能设置
+    SecRulePerfTime 1000  # 记录执行时间超过1000微秒的规则
 
-    # Add custom variables for threat analysis
+    # 添加威胁分析的自定义变量
     SecRule ARGS "@detectSQLi" \
-      "id:990001,phase:2,log,auditlog,msg:'SQL Injection attempt detected',tag:'application',tag:'attack-sqli'"
+      "id:990001,phase:2,log,auditlog,msg:'检测到SQL注入尝试',tag:'application',tag:'attack-sqli'"
 
     SecRule ARGS "@detectXSS" \
-      "id:990002,phase:2,log,auditlog,msg:'XSS attempt detected',tag:'application',tag:'attack-xss'"
+      "id:990002,phase:2,log,auditlog,msg:'检测到XSS尝试',tag:'application',tag:'attack-xss'"
 
-    # Log source IP for correlation with network policies
+    # 记录源IP以与网络策略关联
     SecRule REMOTE_ADDR "@unconditionalMatch" \
       "id:990003,phase:1,log,auditlog,setvar:tx.source_ip=%{REMOTE_ADDR}"

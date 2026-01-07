@@ -1,0 +1,54 @@
+```
+# Configuration and deployment files
+*.env
+*.env.local
+*.env.*
+
+# Logs
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+.env
+.env.local
+.env.*
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+coverage/
+
+# Compiled and build artifacts
+*.o
+*.obj
+*.out
+*.exe
+*.dll
+*.so
+*.a
+
+# Dependencies
+node_modules/
+target/
+.gradle/
+dist/
+build/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+
+# System
+.DS_Store
+Thumbs.db
+```
