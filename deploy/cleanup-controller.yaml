@@ -1,0 +1,90 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: threat-analyzer-cleanup
+  namespace: default
+spec:
+  schedule: "*/5 * * * *"  # Run every 5 minutes
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: threat-analyzer
+          containers:
+          - name: policy-cleanup
+            image: python:3.9-slim
+            command:
+            - /bin/bash
+            - -c
+            - |
+              apt-get update && apt-get install -y kubectl && \
+              pip install requests && \
+              cat > /tmp/cleanup.py << 'EOF'
+
+              import subprocess
+              import json
+              from datetime import datetime
+              import logging
+
+              logging.basicConfig(level=logging.INFO)
+              logger = logging.getLogger(__name__)
+
+              def cleanup_expired_policies():
+                  """Remove CiliumNetworkPolicies that have expired"""
+                  try:
+                      # Get all CiliumNetworkPolicies created by threat-analyzer
+                      result = subprocess.run([
+                          'kubectl', 'get', 'cnp', '-o', 'json'
+                      ], capture_output=True, text=True)
+
+                      if result.returncode != 0:
+                          logger.error(f"Failed to get CNPs: {result.stderr}")
+                          return
+
+                      cnp_data = json.loads(result.stdout)
+
+                      current_time = datetime.utcnow()
+                      expired_policies = []
+
+                      for item in cnp_data.get('items', []):
+                          # Check if policy was created by threat-analyzer
+                          labels = item.get('metadata', {}).get('labels', {})
+                          if labels.get('blocked-by') == 'threat-analyzer':
+                              expires_at = labels.get('expires-at')
+                              if expires_at:
+                                  try:
+                                      # Parse the expiration time
+                                      policy_expires = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+                                      if current_time >= policy_expires:
+                                          expired_policies.append(item['metadata']['name'])
+                                  except ValueError:
+                                      logger.warning(f"Invalid expires-at format for policy {item['metadata']['name']}: {expires_at}")
+
+                      # Delete expired policies
+                      for policy_name in expired_policies:
+                          logger.info(f"Deleting expired policy: {policy_name}")
+                          delete_result = subprocess.run([
+                              'kubectl', 'delete', 'cnp', policy_name
+                          ], capture_output=True, text=True)
+
+                          if delete_result.returncode == 0:
+                              logger.info(f"Successfully deleted expired policy: {policy_name}")
+                          else:
+                              logger.error(f"Failed to delete policy {policy_name}: {delete_result.stderr}")
+
+                  except Exception as e:
+                      logger.error(f"Error during policy cleanup: {e}")
+
+              if __name__ == "__main__":
+                  cleanup_expired_policies()
+
+              EOF
+              python /tmp/cleanup.py
+            resources:
+              requests:
+                memory: "64Mi"
+                cpu: "50m"
+              limits:
+                memory: "128Mi"
+                cpu: "100m"
+          restartPolicy: OnFailure

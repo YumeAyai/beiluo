@@ -1,0 +1,487 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: threat-analyzer
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: threat-analyzer-role
+rules:
+- apiGroups: ["cilium.io"]
+  resources: ["ciliumnetworkpolicies", "ciliumclusterwidenetworkpolicies"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["configmaps", "pods", "services", "namespaces"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: threat-analyzer-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: threat-analyzer-role
+subjects:
+- kind: ServiceAccount
+  name: threat-analyzer
+  namespace: default
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: threat-analyzer-config
+  namespace: default
+data:
+  threat-analyzer.conf: |
+    # Loki Configuration
+    LOKI_URL = "http://loki:3100"
+    LOKI_QUERY = '{app="coraza"} | json'
+
+    # Cilium Configuration
+    CILIUM_URL = "http://cilium-operator:9963"
+
+    # Attack Detection Settings
+    ATTACK_THRESHOLD = 3  # Number of attacks before blocking an IP
+    BLOCK_DURATION_HOURS = 24  # How long to block an IP (in hours)
+    TIME_WINDOW_MINUTES = 10  # Time window to count attacks (in minutes)
+
+    # Logging
+    LOG_LEVEL = "INFO"
+    LOG_FILE = "/var/log/threat-analyzer.log"
+
+    # Network Policy Settings
+    BLOCKED_NAMESPACE = "default"  # Namespace to apply blocking policies
+
+    # Additional filters (optional)
+    IGNORE_INTERNAL_IPS = True  # Whether to ignore internal/private IPs
+    TRUSTED_IP_RANGES = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]  # Don't block these ranges
+
+    # Debug mode
+    DEBUG = False
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: threat-analyzer
+  namespace: default
+  labels:
+    app: threat-analyzer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: threat-analyzer
+  template:
+    metadata:
+      labels:
+        app: threat-analyzer
+    spec:
+      serviceAccountName: threat-analyzer
+      containers:
+      - name: threat-analyzer
+        image: python:3.9-slim
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          apt-get update && apt-get install -y curl jq && \
+          pip install requests && \
+          curl -L https://raw.githubusercontent.com/cilium/cilium/master/install/kubernetes/install.sh | bash -- cilium install && \
+          curl -L https://raw.githubusercontent.com/cilium/cilium/master/examples/kubernetes/connectivity-check/connectivity-check.yaml | kubectl apply -f - && \
+          echo "$CONFIG_CONTENT" > /app/threat-analyzer.conf && \
+          python /app/threat-analyzer.py --config /app/threat-analyzer.conf
+        env:
+        - name: LOKI_URL
+          value: "http://loki:3100"
+        - name: CILIUM_URL
+          value: "http://cilium-operator:9963"
+        - name: ATTACK_THRESHOLD
+          value: "3"
+        - name: BLOCK_DURATION_HOURS
+          value: "24"
+        - name: TIME_WINDOW_MINUTES
+          value: "10"
+        volumeMounts:
+        - name: config-volume
+          mountPath: /app/threat-analyzer.conf
+          subPath: threat-analyzer.conf
+        - name: threat-analyzer-script
+          mountPath: /app/threat-analyzer.py
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: config-volume
+        configMap:
+          name: threat-analyzer-config
+      - name: threat-analyzer-script
+        configMap:
+          name: threat-analyzer-script
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: threat-analyzer-script
+  namespace: default
+data:
+  threat-analyzer.py: |
+    #!/usr/bin/env python3
+    """
+    Threat Analyzer for Passive WAF System
+
+    This script monitors Loki for WAF logs and automatically blocks
+    high-risk IPs using Cilium Network Policies.
+    """
+
+    import os
+    import time
+    import json
+    import logging
+    import requests
+    import ipaddress
+    from datetime import datetime, timedelta
+    from collections import defaultdict
+    import argparse
+
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
+    logger = logging.getLogger(__name__)
+
+    class ThreatAnalyzer:
+        def __init__(self, config_file=None, loki_url=None, cilium_url=None,
+                     attack_threshold=None, block_duration_hours=None, time_window_minutes=None):
+
+            # Load configuration from file if provided
+            if config_file and os.path.exists(config_file):
+                with open(config_file, 'r') as f:
+                    config = {}
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                            key, value = line.split('=', 1)
+                            key = key.strip()
+                            value = value.strip().strip('"\'')
+                            config[key] = value
+
+                self.loki_url = loki_url or config.get('LOKI_URL', 'http://loki:3100')
+                self.cilium_url = cilium_url or config.get('CILIUM_URL', 'http://cilium-operator:9963')
+                self.attack_threshold = int(attack_threshold or config.get('ATTACK_THRESHOLD', '3'))
+                self.block_duration_hours = int(block_duration_hours or config.get('BLOCK_DURATION_HOURS', '24'))
+                self.time_window_minutes = int(time_window_minutes or config.get('TIME_WINDOW_MINUTES', '10'))
+                self.query = config.get('LOKI_QUERY', '{app="coraza"} | json')
+                self.blocked_namespace = config.get('BLOCKED_NAMESPACE', 'default')
+                self.ignore_internal_ips = config.get('IGNORE_INTERNAL_IPS', 'True').lower() == 'true'
+                self.trusted_ip_ranges = [r.strip() for r in config.get('TRUSTED_IP_RANGES', '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16').split(',')]
+                self.debug = config.get('DEBUG', 'False').lower() == 'true'
+            else:
+                # Use provided parameters or defaults
+                self.loki_url = loki_url or os.getenv('LOKI_URL', 'http://loki:3100')
+                self.cilium_url = cilium_url or os.getenv('CILUM_URL', 'http://cilium-operator:9963')
+                self.attack_threshold = int(attack_threshold or os.getenv('ATTACK_THRESHOLD', '3'))
+                self.block_duration_hours = int(block_duration_hours or os.getenv('BLOCK_DURATION_HOURS', '24'))
+                self.time_window_minutes = int(time_window_minutes or 10)
+                self.query = '{app="coraza"} | json'
+                self.blocked_namespace = 'default'
+                self.ignore_internal_ips = True
+                self.trusted_ip_ranges = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+                self.debug = False
+
+            self.blocked_ips = set()
+            self.ip_attack_history = defaultdict(list)  # Store attack timestamps for each IP
+            self.last_query_time = datetime.utcnow() - timedelta(minutes=1)
+
+            if self.debug:
+                logging.getLogger().setLevel(logging.DEBUG)
+
+        def query_loki(self):
+            """Query Loki for recent WAF logs"""
+            # Format the query time range
+            start_time = self.last_query_time.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+            end_time = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+
+            # Loki query parameters
+            params = {
+                'query': self.query,
+                'start': start_time,
+                'end': end_time,
+                'direction': 'forward',
+                'limit': 1000
+            }
+
+            try:
+                response = requests.get(f"{self.loki_url}/loki/api/v1/query_range", params=params)
+                response.raise_for_status()
+
+                data = response.json()
+                logs = []
+
+                if 'data' in data and 'result' in data['data']:
+                    for result in data['data']['result']:
+                        if 'values' in result:
+                            for timestamp_ns, log_line in result['values']:
+                                try:
+                                    log_entry = json.loads(log_line)
+                                    logs.append(log_entry)
+                                except json.JSONDecodeError:
+                                    logger.warning(f"Failed to parse log line: {log_line}")
+
+                # Update last query time
+                self.last_query_time = datetime.utcnow()
+                return logs
+
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Error querying Loki: {e}")
+                return []
+            except Exception as e:
+                logger.error(f"Unexpected error querying Loki: {e}")
+                return []
+
+        def extract_attack_info(self, log_entry):
+            """Extract relevant attack information from WAF log entry"""
+            try:
+                # Common fields in Coraza WAF logs
+                client_ip = log_entry.get('client_ip', log_entry.get('src_ip', 'unknown'))
+                rule_id = log_entry.get('rule_id', log_entry.get('id', 'unknown'))
+                message = log_entry.get('message', log_entry.get('msg', ''))
+                uri = log_entry.get('uri', log_entry.get('request_uri', ''))
+                method = log_entry.get('method', log_entry.get('request_method', ''))
+
+                return {
+                    'client_ip': client_ip,
+                    'rule_id': rule_id,
+                    'message': message,
+                    'uri': uri,
+                    'method': method,
+                    'timestamp': log_entry.get('timestamp', datetime.utcnow().isoformat())
+                }
+            except Exception as e:
+                logger.error(f"Error extracting attack info: {e}")
+                return None
+
+        def is_trusted_ip(self, ip):
+            """Check if IP is in trusted ranges or is internal"""
+            try:
+                ip_obj = ipaddress.ip_address(ip)
+
+                # Check if it's a private IP and we should ignore internal IPs
+                if self.ignore_internal_ips and ip_obj.is_private:
+                    return True
+
+                # Check if it's in trusted IP ranges
+                for trusted_range in self.trusted_ip_ranges:
+                    if ipaddress.ip_address(ip) in ipaddress.ip_network(trusted_range, strict=False):
+                        return True
+            except ValueError:
+                # Invalid IP address
+                return True  # Treat invalid IPs as trusted to avoid false positives
+
+            return False
+
+        def analyze_attacks(self, logs):
+            """Analyze logs to identify high-risk IPs"""
+            current_time = datetime.utcnow()
+
+            for log in logs:
+                attack_info = self.extract_attack_info(log)
+                if attack_info and attack_info['client_ip'] != 'unknown':
+                    ip = attack_info['client_ip']
+
+                    # Skip trusted IPs
+                    if self.is_trusted_ip(ip):
+                        if self.debug:
+                            logger.debug(f"Skipping trusted IP: {ip}")
+                        continue
+
+                    # Add timestamp to IP's attack history
+                    self.ip_attack_history[ip].append(current_time)
+
+            # Identify IPs that exceed the threshold in the time window
+            high_risk_ips = {}
+            time_threshold = datetime.utcnow() - timedelta(minutes=self.time_window_minutes)
+
+            for ip, timestamps in self.ip_attack_history.items():
+                # Filter timestamps to only include those within the time window
+                recent_attacks = [t for t in timestamps if t >= time_threshold]
+
+                # Update the history with only recent attacks
+                self.ip_attack_history[ip] = recent_attacks
+
+                # Check if IP exceeds threshold and hasn't been blocked yet
+                if len(recent_attacks) >= self.attack_threshold and ip not in self.blocked_ips:
+                    high_risk_ips[ip] = {
+                        'attack_count': len(recent_attacks),
+                        'first_seen': min(recent_attacks),
+                        'last_seen': max(recent_attacks),
+                        'recent_attacks': recent_attacks
+                    }
+
+            return high_risk_ips
+
+        def create_cilium_network_policy(self, ip):
+            """Create a Cilium NetworkPolicy to block an IP"""
+            policy_name = f"block-ip-{ip.replace('.', '-').replace(':', '-')}"
+            expires_at = datetime.utcnow() + timedelta(hours=self.block_duration_hours)
+
+            policy = {
+                "apiVersion": "cilium.io/v2",
+                "kind": "CiliumNetworkPolicy",
+                "metadata": {
+                    "name": policy_name,
+                    "namespace": self.blocked_namespace,
+                    "labels": {
+                        "auto-generated": "true",
+                        "blocked-by": "threat-analyzer",
+                        "blocked-at": datetime.utcnow().isoformat(),
+                        "expires-at": expires_at.isoformat(),
+                        "ip-blocked": ip
+                    }
+                },
+                "spec": {
+                    "description": f"Block IP {ip} due to suspicious activity detected by threat analyzer",
+                    "endpointSelector": {
+                        "matchLabels": {}  # Apply to all endpoints
+                    },
+                    "ingressDeny": [
+                        {
+                            "fromCIDR": f"{ip}/32"
+                        }
+                    ],
+                    "egressDeny": [
+                        {
+                            "toCIDR": [f"{ip}/32"]
+                        }
+                    ]
+                }
+            }
+
+            return policy
+
+        def block_ip_with_cilium(self, ip):
+            """Block an IP using Cilium Network Policy"""
+            try:
+                policy = self.create_cilium_network_policy(ip)
+
+                # Apply the policy using kubectl
+                import subprocess
+
+                # Write policy to temporary file
+                policy_file = f"/tmp/cilium_policy_{ip.replace('.', '-').replace(':', '-')}.yaml"
+                with open(policy_file, 'w') as f:
+                    json.dump(policy, f, indent=2)
+
+                # Apply the policy using kubectl
+                cmd = ['kubectl', 'apply', '-f', policy_file]
+                result = subprocess.run(cmd, capture_output=True, text=True)
+
+                if result.returncode == 0:
+                    logger.info(f"Successfully blocked IP {ip} using Cilium Network Policy")
+                    self.blocked_ips.add(ip)
+
+                    # Clean up temporary file
+                    os.remove(policy_file)
+                    return True
+                else:
+                    logger.error(f"Failed to apply Cilium policy: {result.stderr}")
+                    return False
+
+            except Exception as e:
+                logger.error(f"Error blocking IP {ip}: {e}")
+                return False
+
+        def run(self):
+            """Main execution loop"""
+            logger.info("Starting threat analyzer...")
+            logger.info(f"Monitoring Loki at {self.loki_url}")
+            logger.info(f"Blocking via Cilium at {self.cilium_url}")
+            logger.info(f"Threshold: {self.attack_threshold} attacks in time window")
+            logger.info(f"Block duration: {self.block_duration_hours} hours")
+
+            while True:
+                try:
+                    # Query Loki for recent WAF logs
+                    logs = self.query_loki()
+
+                    if logs:
+                        logger.info(f"Found {len(logs)} WAF log entries to analyze")
+
+                        # Analyze logs for high-risk IPs
+                        high_risk_ips = self.analyze_attacks(logs)
+
+                        if high_risk_ips:
+                            logger.info(f"Identified {len(high_risk_ips)} high-risk IPs to block")
+
+                            for ip, details in high_risk_ips.items():
+                                logger.info(f"Blocking IP {ip} - {details['attack_count']} attacks detected")
+                                logger.info(f"First seen: {details['first_seen']}, Last seen: {details['last_seen']}")
+
+                                if self.block_ip_with_cilium(ip):
+                                    logger.info(f"Successfully blocked {ip}")
+                                else:
+                                    logger.error(f"Failed to block {ip}")
+                        else:
+                            logger.debug("No high-risk IPs found in this batch")
+                    else:
+                        logger.debug("No new logs from Loki")
+
+                    # Wait before next query
+                    time.sleep(30)  # Wait 30 seconds before next check
+
+                except KeyboardInterrupt:
+                    logger.info("Received interrupt signal, shutting down...")
+                    break
+                except Exception as e:
+                    logger.error(f"Error in main loop: {e}")
+                    time.sleep(30)  # Wait before retrying
+
+    def main():
+        parser = argparse.ArgumentParser(description='Threat Analyzer for Passive WAF System')
+        parser.add_argument('--config',
+                           default='threat-analyzer.conf',
+                           help='Configuration file path (default: threat-analyzer.conf)')
+        parser.add_argument('--loki-url',
+                           help='Loki URL')
+        parser.add_argument('--cilium-url',
+                           help='Cilium URL')
+        parser.add_argument('--threshold',
+                           type=int,
+                           help='Attack threshold')
+        parser.add_argument('--duration',
+                           type=int,
+                           help='Block duration in hours')
+        parser.add_argument('--time-window',
+                           type=int,
+                           help='Time window to count attacks (in minutes)')
+
+        args = parser.parse_args()
+
+        analyzer = ThreatAnalyzer(
+            config_file=args.config,
+            loki_url=args.loki_url,
+            cilium_url=args.cilium_url,
+            attack_threshold=args.threshold,
+            block_duration_hours=args.duration,
+            time_window_minutes=args.time_window
+        )
+
+        analyzer.run()
+
+    if __name__ == "__main__":
+        main()

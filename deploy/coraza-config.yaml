@@ -1,0 +1,61 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coraza-config
+  namespace: default
+data:
+  coraza.conf: |
+    # Coraza Configuration for Passive WAF
+
+    # Set the rule engine to DetectionOnly mode (logs but doesn't block)
+    SecRuleEngine DetectionOnly
+
+    # Include OWASP CRS rules for comprehensive protection
+    Include @REQUEST-900-EXCLUSION-RULES-BEFORE-CORAZA
+    Include @RESPONSE-999-EXCLUSION-RULES-AFTER-CORAZA
+
+    # Core Ruleset - Only include essential rule files for detection
+    Include @OWASP_CRS/REQUEST-901-INITIALIZATION.conf
+    Include @OWASP_CRS/REQUEST-910-IP-REPUTATION.conf
+    Include @OWASP_CRS/REQUEST-920-PROTOCOL-ENFORCEMENT.conf
+    Include @OWASP_CRS/REQUEST-921-PROTOCOL-ATTACK.conf
+    Include @OWASP_CRS/REQUEST-930-APPLICATION-ATTACK-LFI.conf
+    Include @OWASP_CRS/REQUEST-931-APPLICATION-ATTACK-RFI.conf
+    Include @OWASP_CRS/REQUEST-932-APPLICATION-ATTACK-RCE.conf
+    Include @OWASP_CRS/REQUEST-933-APPLICATION-ATTACK-PHP.conf
+    Include @OWASP_CRS/REQUEST-941-APPLICATION-ATTACK-XSS.conf
+    Include @OWASP_CRS/REQUEST-942-APPLICATION-ATTACK-SQLI.conf
+    Include @OWASP_CRS/REQUEST-943-APPLICATION-ATTACK-SESSION-FIXATION.conf
+    Include @OWASP_CRS/REQUEST-944-APPLICATION-ATTACK-JAVA.conf
+    Include @OWASP_CRS/REQUEST-949-BLOCKING-EVALUATION.conf
+
+    # Audit logging configuration for threat analysis
+    SecAuditEngine RelevantOnly
+    SecAuditLogRelevantStatus "^(?:5|4(?!04))"  # Log 5xx and 4xx (except 404)
+    SecAuditLogParts ABCFHZ  # Log request/response headers and bodies
+    SecAuditLogType Serial  # Single log entry per request
+    SecAuditLogFormat JSON  # JSON format for easy parsing
+
+    # Performance tuning for detection mode
+    SecResponseBodyAccess Off  # Don't inspect response bodies in detection mode
+    SecRule REQUEST_HEADERS:Content-Type "text/xml" \
+      "id:100,phase:1,t:lower,ctl:ruleRemoveById=20000-29999"
+
+    # Logging configuration
+    SecDebugLogLevel 1
+    SecAuditLog /dev/stdout  # Output to stdout for Loki collection
+    SecErrorLog /dev/stdout   # Output errors to stdout as well
+
+    # Performance settings
+    SecRulePerfTime 1000  # Log rules that take more than 1000us
+
+    # Add custom variables for threat analysis
+    SecRule ARGS "@detectSQLi" \
+      "id:990001,phase:2,log,auditlog,msg:'SQL Injection attempt detected',tag:'application',tag:'attack-sqli'"
+
+    SecRule ARGS "@detectXSS" \
+      "id:990002,phase:2,log,auditlog,msg:'XSS attempt detected',tag:'application',tag:'attack-xss'"
+
+    # Log source IP for correlation with network policies
+    SecRule REMOTE_ADDR "@unconditionalMatch" \
+      "id:990003,phase:1,log,auditlog,setvar:tx.source_ip=%{REMOTE_ADDR}"

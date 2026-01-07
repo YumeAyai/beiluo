@@ -1,0 +1,249 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "WAF Threat Dashboard",
+    "tags": ["waf", "security", "coraza"],
+    "style": "dark",
+    "timezone": "browser",
+    "refresh": "5s",
+    "schemaVersion": 27,
+    "version": 1,
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "timepicker": {},
+    "templating": {
+      "list": []
+    },
+    "annotations": {
+      "list": []
+    },
+    "editable": true,
+    "gnetId": null,
+    "graphTooltip": 0,
+    "links": [],
+    "panels": [
+      {
+        "id": 1,
+        "title": "Attack Count Over Time",
+        "type": "graph",
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 0
+        },
+        "targets": [
+          {
+            "expr": "sum(rate({app=\"coraza\"} | json | __error__=\"\" [5m])) by (rule_id)",
+            "legendFormat": "Rule {{rule_id}}",
+            "refId": "A"
+          }
+        ],
+        "yAxes": [
+          {
+            "label": "Attacks per Second"
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "title": "Top Attack Sources",
+        "type": "table",
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 0
+        },
+        "targets": [
+          {
+            "expr": "sum by (client_ip) (count_over_time({app=\"coraza\"} | json | client_ip!=\"\" [1h]))",
+            "format": "table",
+            "instant": true,
+            "refId": "A"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "excludeByName": {
+                "Time": true,
+                "client_ip": false
+              },
+              "indexByName": {
+                "Time": 0,
+                "Value": 2,
+                "client_ip": 1
+              },
+              "renameByName": {
+                "client_ip": "Source IP",
+                "Value": "Attack Count"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Attack Types Distribution",
+        "type": "piechart",
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 8
+        },
+        "targets": [
+          {
+            "expr": "sum by (rule_id) (count_over_time({app=\"coraza\"} | json | rule_id!=\"\" [1h]))",
+            "format": "time_series",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "reduceOptions": {
+            "values": false,
+            "calcs": ["sum"],
+            "fields": ""
+          },
+          "text": {}
+        }
+      },
+      {
+        "id": 4,
+        "title": "Blocked IPs by Threat Analyzer",
+        "type": "stat",
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 8
+        },
+        "targets": [
+          {
+            "expr": "count(cilium_network_policy_info{policy_type=\"CiliumNetworkPolicy\", policy_name=~\"block-ip-.*\"})",
+            "instant": true,
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "steps": [
+                {
+                  "color": "green",
+                  "value": null
+                },
+                {
+                  "color": "red",
+                  "value": 80
+                }
+              ]
+            },
+            "unit": "short"
+          }
+        },
+        "options": {
+          "colorMode": "value",
+          "graphMode": "area",
+          "justifyMode": "auto",
+          "orientation": "auto",
+          "reduceOptions": {
+            "calcs": ["lastNotNull"],
+            "fields": "",
+            "values": false
+          },
+          "text": {},
+          "textMode": "auto"
+        }
+      },
+      {
+        "id": 5,
+        "title": "Recent WAF Logs",
+        "type": "logs",
+        "gridPos": {
+          "h": 8,
+          "w": 24,
+          "x": 0,
+          "y": 16
+        },
+        "targets": [
+          {
+            "expr": "{app=\"coraza\"} | json | line_format \"{{.timestamp}} - {{.client_ip}} - Rule: {{.rule_id}} - Message: {{.message}} - URI: {{.uri}} - Method: {{.method}}\"",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "showLabels": false,
+          "showTime": true,
+          "wrapLogMessage": true,
+          "prettifyLogEntries": true
+        }
+      }
+    ],
+    "refresh": "5s",
+    "schemaVersion": 27,
+    "style": "dark",
+    "tags": ["waf", "security", "coraza"],
+    "templating": {
+      "list": [
+        {
+          "current": {
+            "selected": false,
+            "text": "1h",
+            "value": "1h"
+          },
+          "description": null,
+          "error": null,
+          "hide": 0,
+          "includeAll": false,
+          "label": "Time Range",
+          "multi": false,
+          "name": "timeRange",
+          "options": [
+            {
+              "selected": false,
+              "text": "30m",
+              "value": "30m"
+            },
+            {
+              "selected": true,
+              "text": "1h",
+              "value": "1h"
+            },
+            {
+              "selected": false,
+              "text": "6h",
+              "value": "6h"
+            },
+            {
+              "selected": false,
+              "text": "24h",
+              "value": "24h"
+            }
+          ],
+          "query": "30m,1h,6h,24h",
+          "skipUrlSync": false,
+          "type": "custom"
+        }
+      ]
+    },
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "timepicker": {},
+    "timezone": "",
+    "title": "WAF Threat Dashboard",
+    "uid": "waf-threat-dashboard",
+    "version": 1
+  },
+  "folderId": 0,
+  "overwrite": false
+}
