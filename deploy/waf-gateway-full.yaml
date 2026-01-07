@@ -65,7 +65,7 @@ metadata:
   labels:
     app: waf-gateway
 spec:
-  type: LoadBalancer  # Change to NodePort or ClusterIP for testing
+  type: LoadBalancer  # 测试时可更改为NodePort或ClusterIP
   ports:
   - name: http
     port: 80

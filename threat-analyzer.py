@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
-Threat Analyzer for Passive WAF System
+被动WAF系统威胁分析器
 
-This script monitors Loki for WAF logs and automatically blocks
-high-risk IPs using Cilium Network Policies.
+该脚本监控Loki的WAF日志，并使用Cilium网络策略自动阻止高风险IP。
 """
 
 import os
@@ -16,7 +15,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 import argparse
 
-# Configure logging
+# 配置日志
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -27,7 +26,7 @@ class ThreatAnalyzer:
     def __init__(self, config_file=None, loki_url=None, cilium_url=None,
                  attack_threshold=None, block_duration_hours=None, time_window_minutes=None):
 
-        # Load configuration from file if provided
+        # 如果提供了配置文件，则从文件加载配置
         if config_file and os.path.exists(config_file):
             with open(config_file, 'r') as f:
                 config = {}
@@ -50,7 +49,7 @@ class ThreatAnalyzer:
             self.trusted_ip_ranges = [r.strip() for r in config.get('TRUSTED_IP_RANGES', '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16').split(',')]
             self.debug = config.get('DEBUG', 'False').lower() == 'true'
         else:
-            # Use provided parameters or defaults
+            # 使用提供的参数或默认值
             self.loki_url = loki_url or os.getenv('LOKI_URL', 'http://loki:3100')
             self.cilium_url = cilium_url or os.getenv('CILIUM_URL', 'http://cilium-operator:9963')
             self.attack_threshold = int(attack_threshold or os.getenv('ATTACK_THRESHOLD', '3'))
@@ -63,19 +62,19 @@ class ThreatAnalyzer:
             self.debug = False
 
         self.blocked_ips = set()
-        self.ip_attack_history = defaultdict(list)  # Store attack timestamps for each IP
+        self.ip_attack_history = defaultdict(list)  # 存储每个IP的攻击时间戳
         self.last_query_time = datetime.utcnow() - timedelta(minutes=1)
 
         if self.debug:
             logging.getLogger().setLevel(logging.DEBUG)
 
     def query_loki(self):
-        """Query Loki for recent WAF logs"""
-        # Format the query time range
+        """查询Loki获取最近的WAF日志"""
+        # 格式化查询时间范围
         start_time = self.last_query_time.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
         end_time = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%fZ')
 
-        # Loki query parameters
+        # Loki查询参数
         params = {
             'query': self.query,
             'start': start_time,
@@ -101,7 +100,7 @@ class ThreatAnalyzer:
                             except json.JSONDecodeError:
                                 logger.warning(f"Failed to parse log line: {log_line}")
 
-            # Update last query time
+            # 更新最后查询时间
             self.last_query_time = datetime.utcnow()
             return logs
 
@@ -113,9 +112,9 @@ class ThreatAnalyzer:
             return []
 
     def extract_attack_info(self, log_entry):
-        """Extract relevant attack information from WAF log entry"""
+        """从WAF日志条目中提取相关攻击信息"""
         try:
-            # Common fields in Coraza WAF logs
+            # Coraza WAF日志中的常见字段
             client_ip = log_entry.get('client_ip', log_entry.get('src_ip', 'unknown'))
             rule_id = log_entry.get('rule_id', log_entry.get('id', 'unknown'))
             message = log_entry.get('message', log_entry.get('msg', ''))
@@ -135,26 +134,26 @@ class ThreatAnalyzer:
             return None
 
     def is_trusted_ip(self, ip):
-        """Check if IP is in trusted ranges or is internal"""
+        """检查IP是否在信任范围内或是否为内部IP"""
         try:
             ip_obj = ipaddress.ip_address(ip)
 
-            # Check if it's a private IP and we should ignore internal IPs
+            # 检查是否为私有IP且我们应该忽略内部IP
             if self.ignore_internal_ips and ip_obj.is_private:
                 return True
 
-            # Check if it's in trusted IP ranges
+            # 检查是否在信任的IP范围内
             for trusted_range in self.trusted_ip_ranges:
                 if ipaddress.ip_address(ip) in ipaddress.ip_network(trusted_range, strict=False):
                     return True
         except ValueError:
-            # Invalid IP address
-            return True  # Treat invalid IPs as trusted to avoid false positives
+            # 无效IP地址
+            return True  # 将无效IP视为信任IP以避免误报
 
         return False
 
     def analyze_attacks(self, logs):
-        """Analyze logs to identify high-risk IPs"""
+        """分析日志以识别高风险IP"""
         current_time = datetime.utcnow()
 
         for log in logs:
@@ -162,27 +161,27 @@ class ThreatAnalyzer:
             if attack_info and attack_info['client_ip'] != 'unknown':
                 ip = attack_info['client_ip']
 
-                # Skip trusted IPs
+                # 跳过信任的IP
                 if self.is_trusted_ip(ip):
                     if self.debug:
                         logger.debug(f"Skipping trusted IP: {ip}")
                     continue
 
-                # Add timestamp to IP's attack history
+                # 将时间戳添加到IP的攻击历史中
                 self.ip_attack_history[ip].append(current_time)
 
-        # Identify IPs that exceed the threshold in the time window
+        # 识别在时间窗口内超过阈值的IP
         high_risk_ips = {}
         time_threshold = datetime.utcnow() - timedelta(minutes=self.time_window_minutes)
 
         for ip, timestamps in self.ip_attack_history.items():
-            # Filter timestamps to only include those within the time window
+            # 过滤时间戳，只包含时间窗口内的
             recent_attacks = [t for t in timestamps if t >= time_threshold]
 
-            # Update the history with only recent attacks
+            # 仅使用最近的攻击更新历史
             self.ip_attack_history[ip] = recent_attacks
 
-            # Check if IP exceeds threshold and hasn't been blocked yet
+            # 检查IP是否超过阈值且尚未被阻止
             if len(recent_attacks) >= self.attack_threshold and ip not in self.blocked_ips:
                 high_risk_ips[ip] = {
                     'attack_count': len(recent_attacks),
@@ -232,20 +231,20 @@ class ThreatAnalyzer:
         return policy
 
     def block_ip_with_cilium(self, ip):
-        """Block an IP using Cilium Network Policy"""
+        """使用Cilium网络策略阻止IP"""
         try:
             policy = self.create_cilium_network_policy(ip)
 
-            # Apply the policy using kubectl or directly via Cilium API if available
-            # For now, we'll use kubectl command
+            # 使用kubectl或直接通过Cilium API应用策略（如果可用）
+            # 现在，我们使用kubectl命令
             import subprocess
 
-            # Write policy to temporary file
+            # 将策略写入临时文件
             policy_file = f"/tmp/cilium_policy_{ip.replace('.', '-').replace(':', '-')}.yaml"
             with open(policy_file, 'w') as f:
                 json.dump(policy, f, indent=2)
 
-            # Apply the policy using kubectl
+            # 使用kubectl应用策略
             cmd = ['kubectl', 'apply', '-f', policy_file]
             result = subprocess.run(cmd, capture_output=True, text=True)
 
@@ -253,10 +252,10 @@ class ThreatAnalyzer:
                 logger.info(f"Successfully blocked IP {ip} using Cilium Network Policy")
                 self.blocked_ips.add(ip)
 
-                # Clean up temporary file
+                # 清理临时文件
                 os.remove(policy_file)
 
-                # Also try to apply via Cilium API if available
+                # 如果可用，也尝试通过Cilium API应用
                 try:
                     api_response = requests.put(
                         f"{self.cilium_url}/v2/ciliumnetworkpolicy",
@@ -278,7 +277,7 @@ class ThreatAnalyzer:
             return False
 
     def run(self):
-        """Main execution loop"""
+        """主执行循环"""
         logger.info("Starting threat analyzer...")
         logger.info(f"Monitoring Loki at {self.loki_url}")
         logger.info(f"Blocking via Cilium at {self.cilium_url}")
@@ -287,13 +286,13 @@ class ThreatAnalyzer:
 
         while True:
             try:
-                # Query Loki for recent WAF logs
+                # 查询Loki获取最近的WAF日志
                 logs = self.query_loki()
 
                 if logs:
                     logger.info(f"Found {len(logs)} WAF log entries to analyze")
 
-                    # Analyze logs for high-risk IPs
+                    # 分析日志以识别高风险IP
                     high_risk_ips = self.analyze_attacks(logs)
 
                     if high_risk_ips:
@@ -312,34 +311,34 @@ class ThreatAnalyzer:
                 else:
                     logger.debug("No new logs from Loki")
 
-                # Wait before next query
-                time.sleep(30)  # Wait 30 seconds before next check
+                # 等待下次查询
+                time.sleep(30)  # 等待30秒再进行下次检查
 
             except KeyboardInterrupt:
                 logger.info("Received interrupt signal, shutting down...")
                 break
             except Exception as e:
                 logger.error(f"Error in main loop: {e}")
-                time.sleep(30)  # Wait before retrying
+                time.sleep(30)  # 等待后重试
 
 def main():
-    parser = argparse.ArgumentParser(description='Threat Analyzer for Passive WAF System')
+    parser = argparse.ArgumentParser(description='被动WAF系统威胁分析器')
     parser.add_argument('--config',
                        default='threat-analyzer.conf',
-                       help='Configuration file path (default: threat-analyzer.conf)')
+                       help='配置文件路径（默认：threat-analyzer.conf）')
     parser.add_argument('--loki-url',
                        help='Loki URL')
     parser.add_argument('--cilium-url',
                        help='Cilium URL')
     parser.add_argument('--threshold',
                        type=int,
-                       help='Attack threshold')
+                       help='攻击阈值')
     parser.add_argument('--duration',
                        type=int,
-                       help='Block duration in hours')
+                       help='阻止时长（小时）')
     parser.add_argument('--time-window',
                        type=int,
-                       help='Time window to count attacks (in minutes)')
+                       help='统计攻击的时间窗口（分钟）')
 
     args = parser.parse_args()
 

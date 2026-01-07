@@ -36,30 +36,30 @@ metadata:
   namespace: default
 data:
   threat-analyzer.conf: |
-    # Loki Configuration
+    # Loki配置
     LOKI_URL = "http://loki:3100"
     LOKI_QUERY = '{app="coraza"} | json'
 
-    # Cilium Configuration
+    # Cilium配置
     CILIUM_URL = "http://cilium-operator:9963"
 
-    # Attack Detection Settings
-    ATTACK_THRESHOLD = 3  # Number of attacks before blocking an IP
-    BLOCK_DURATION_HOURS = 24  # How long to block an IP (in hours)
-    TIME_WINDOW_MINUTES = 10  # Time window to count attacks (in minutes)
+    # 攻击检测设置
+    ATTACK_THRESHOLD = 3  # 阻止IP前的攻击次数
+    BLOCK_DURATION_HOURS = 24  # 阻止IP的时长（小时）
+    TIME_WINDOW_MINUTES = 10  # 统计攻击的时间窗口（分钟）
 
-    # Logging
+    # 日志
     LOG_LEVEL = "INFO"
     LOG_FILE = "/var/log/threat-analyzer.log"
 
-    # Network Policy Settings
-    BLOCKED_NAMESPACE = "default"  # Namespace to apply blocking policies
+    # 网络策略设置
+    BLOCKED_NAMESPACE = "default"  # 应用阻止策略的命名空间
 
-    # Additional filters (optional)
-    IGNORE_INTERNAL_IPS = True  # Whether to ignore internal/private IPs
-    TRUSTED_IP_RANGES = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]  # Don't block these ranges
+    # 额外过滤器（可选）
+    IGNORE_INTERNAL_IPS = True  # 是否忽略内部/私有IP
+    TRUSTED_IP_RANGES = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]  # 不要阻止这些范围
 
-    # Debug mode
+    # 调试模式
     DEBUG = False
 ---
 apiVersion: apps/v1
