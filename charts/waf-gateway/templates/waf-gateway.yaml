@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "waf-gateway.fullname" . }}
+  labels:
+    {{- include "waf-gateway.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.wafGateway.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "waf-gateway.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/envoy-config.yaml") . | sha256sum }}
+      labels:
+        {{- include "waf-gateway.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+      - name: envoy
+        image: "{{ .Values.wafGateway.image.repository }}:{{ .Values.wafGateway.image.tag }}"
+        imagePullPolicy: {{ .Values.wafGateway.image.pullPolicy }}
+        ports:
+        - containerPort: 80
+          name: http
+        - containerPort: 443
+          name: https
+        - containerPort: 10000
+          name: admin
+        volumeMounts:
+        - name: envoy-config
+          mountPath: /etc/envoy
+        - name: coraza-wasm
+          mountPath: /etc/envoy/wasm
+        resources:
+          {{- toYaml .Values.wafGateway.resources | nindent 10 }}
+        livenessProbe:
+          httpGet:
+            path: /ready
+            port: 10000
+          initialDelaySeconds: {{ .Values.wafGateway.livenessProbe.initialDelaySeconds }}
+          periodSeconds: {{ .Values.wafGateway.livenessProbe.periodSeconds }}
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 10000
+          initialDelaySeconds: {{ .Values.wafGateway.readinessProbe.initialDelaySeconds }}
+          periodSeconds: {{ .Values.wafGateway.readinessProbe.periodSeconds }}
+      volumes:
+      - name: envoy-config
+        configMap:
+          name: {{ include "waf-gateway.fullname" . }}-envoy-config
+      - name: coraza-wasm
+        configMap:
+          name: {{ include "waf-gateway.fullname" . }}-coraza-wasm-plugin
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "waf-gateway.fullname" . }}
+  labels:
+    {{- include "waf-gateway.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.wafGateway.service.type }}
+  ports:
+  - name: http
+    port: {{ .Values.wafGateway.service.ports.http }}
+    targetPort: 80
+    protocol: TCP
+  - name: https
+    port: {{ .Values.wafGateway.service.ports.https }}
+    targetPort: 443
+    protocol: TCP
+  selector:
+    {{- include "waf-gateway.selectorLabels" . | nindent 4 }}
